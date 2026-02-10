@@ -64,7 +64,6 @@ public sealed class KerioJsonRpcClient
         CancellationToken cancellationToken)
     {
         var url = BuildApiUrl(config.BaseUrl);
-
         var attempts = BuildLogRequestPayloads(from, to);
         var attemptErrors = new List<string>();
 
@@ -73,26 +72,19 @@ public sealed class KerioJsonRpcClient
             try
             {
                 using var doc = await SendAuthorizedJsonRpcAsync(url, token, attempt.Payload, cancellationToken);
-                EnsureNoJsonRpcError(doc.RootElement, attempt.MethodName);
+                EnsureNoJsonRpcError(doc.RootElement, attempt.AttemptName);
 
                 if (!TryExtractLogItems(doc.RootElement, out var items))
                 {
-                    attemptErrors.Add($"{attempt.MethodName}: нет массива записей в ответе");
+                    attemptErrors.Add($"{attempt.AttemptName}: response has no log array");
                     continue;
                 }
 
-                var logs = ParseLogs(items);
-                if (logs.Count > 0)
-                {
-                    return logs;
-                }
-
-                // Пустой массив — корректный ответ (просто нет данных в периоде).
-                return logs;
+                return ParseLogs(items);
             }
             catch (InvalidOperationException ex)
             {
-                attemptErrors.Add($"{attempt.MethodName}: {ex.Message}");
+                attemptErrors.Add(ex.Message);
             }
         }
 
@@ -100,43 +92,124 @@ public sealed class KerioJsonRpcClient
         throw new InvalidOperationException($"Не удалось получить логи KerioControl. {allErrors}");
     }
 
-    private static IReadOnlyList<(string MethodName, object Payload)> BuildLogRequestPayloads(DateTime from, DateTime to)
+    private static IReadOnlyList<(string AttemptName, object Payload)> BuildLogRequestPayloads(DateTime from, DateTime to)
     {
         var fromIso = from.ToUniversalTime().ToString("O");
         var toIso = to.ToUniversalTime().ToString("O");
+        var fields = new[] { "timestamp", "user", "url", "category", "bytes" };
 
         return new List<(string, object)>
         {
             (
-                "Logs.get",
+                "Logs.get named(http,query+fields+limit)",
                 new
                 {
                     jsonrpc = "2.0",
-                    id = "logs-get",
+                    id = "logs-1",
                     method = "Logs.get",
                     @params = new
                     {
                         logName = "http",
                         query = new { from = fromIso, to = toIso },
-                        fields = new[] { "timestamp", "user", "url", "category", "bytes" },
+                        fields,
                         limit = 5000
                     }
                 }
             ),
             (
-                "Logs.get (http_access)",
+                "Logs.get named(http_access,query+fields+limit)",
                 new
                 {
                     jsonrpc = "2.0",
-                    id = "logs-get-http-access",
+                    id = "logs-2",
                     method = "Logs.get",
                     @params = new
                     {
                         logName = "http_access",
                         query = new { from = fromIso, to = toIso },
-                        fields = new[] { "timestamp", "user", "url", "category", "bytes" },
+                        fields,
                         limit = 5000
                     }
+                }
+            ),
+            (
+                "Logs.get named(http,query)",
+                new
+                {
+                    jsonrpc = "2.0",
+                    id = "logs-3",
+                    method = "Logs.get",
+                    @params = new
+                    {
+                        logName = "http",
+                        query = new { from = fromIso, to = toIso }
+                    }
+                }
+            ),
+            (
+                "Logs.get named(http_access,query)",
+                new
+                {
+                    jsonrpc = "2.0",
+                    id = "logs-4",
+                    method = "Logs.get",
+                    @params = new
+                    {
+                        logName = "http_access",
+                        query = new { from = fromIso, to = toIso }
+                    }
+                }
+            ),
+            (
+                "Logs.get positional(http,query,fields,limit)",
+                new
+                {
+                    jsonrpc = "2.0",
+                    id = "logs-5",
+                    method = "Logs.get",
+                    @params = new object[]
+                    {
+                        "http",
+                        new { from = fromIso, to = toIso },
+                        fields,
+                        5000
+                    }
+                }
+            ),
+            (
+                "Logs.get positional(http_access,query,fields,limit)",
+                new
+                {
+                    jsonrpc = "2.0",
+                    id = "logs-6",
+                    method = "Logs.get",
+                    @params = new object[]
+                    {
+                        "http_access",
+                        new { from = fromIso, to = toIso },
+                        fields,
+                        5000
+                    }
+                }
+            ),
+            (
+                "Logs.get named(http only)",
+                new
+                {
+                    jsonrpc = "2.0",
+                    id = "logs-7",
+                    method = "Logs.get",
+                    @params = new { logName = "http" }
+                }
+            ),
+            (
+                "Logs.get positional(http only)",
+                new
+                {
+                    jsonrpc = "2.0",
+                    id = "logs-8",
+                    method = "Logs.get",
+                    @params = new object[] { "http" }
                 }
             )
         };
@@ -234,7 +307,7 @@ public sealed class KerioJsonRpcClient
         return logs;
     }
 
-    private static void EnsureNoJsonRpcError(JsonElement root, string methodName)
+    private static void EnsureNoJsonRpcError(JsonElement root, string attemptName)
     {
         if (!root.TryGetProperty("error", out var error))
         {
@@ -245,7 +318,11 @@ public sealed class KerioJsonRpcClient
             ? messageElement.GetString()
             : error.ToString();
 
-        throw new InvalidOperationException($"{methodName}: {message}");
+        var code = error.TryGetProperty("code", out var codeElement)
+            ? codeElement.ToString()
+            : "n/a";
+
+        throw new InvalidOperationException($"{attemptName}: JSON-RPC error (code={code}): {message}");
     }
 
     private static string BuildApiUrl(string baseUrl)
