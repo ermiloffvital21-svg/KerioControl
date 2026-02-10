@@ -53,7 +53,8 @@ public sealed class KerioJsonRpcClient
             return sessionTokenElement.GetString() ?? throw new InvalidOperationException("Kerio returned empty session token.");
         }
 
-        throw new InvalidOperationException("Kerio login response does not include token/sessionToken.");
+        // Для некоторых сборок token может не требоваться (cookie-сессия).
+        return string.Empty;
     }
 
     public async Task<IReadOnlyList<InternetLogEntry>> GetInternetLogsAsync(
@@ -97,122 +98,108 @@ public sealed class KerioJsonRpcClient
         var fromIso = from.ToUniversalTime().ToString("O");
         var toIso = to.ToUniversalTime().ToString("O");
         var fields = new[] { "timestamp", "user", "url", "category", "bytes" };
+        var logNames = new[] { "http", "http_access", "web" };
 
-        return new List<(string, object)>
+        var attempts = new List<(string AttemptName, object Payload)>();
+
+        foreach (var logName in logNames)
         {
-            (
-                "Logs.get named(http,query+fields+limit)",
-                new
+            // Logs.get named
+            attempts.Add(($"Logs.get named({logName},query+fields+limit)", new
+            {
+                jsonrpc = "2.0",
+                id = $"lg-n-1-{logName}",
+                method = "Logs.get",
+                @params = new
                 {
-                    jsonrpc = "2.0",
-                    id = "logs-1",
-                    method = "Logs.get",
-                    @params = new
-                    {
-                        logName = "http",
-                        query = new { from = fromIso, to = toIso },
-                        fields,
-                        limit = 5000
-                    }
+                    logName,
+                    query = new { from = fromIso, to = toIso },
+                    fields,
+                    limit = 5000
                 }
-            ),
-            (
-                "Logs.get named(http_access,query+fields+limit)",
-                new
+            }));
+
+            // Logs.get named with dateFrom/dateTo
+            attempts.Add(($"Logs.get named({logName},dateFrom/dateTo)", new
+            {
+                jsonrpc = "2.0",
+                id = $"lg-n-2-{logName}",
+                method = "Logs.get",
+                @params = new
                 {
-                    jsonrpc = "2.0",
-                    id = "logs-2",
-                    method = "Logs.get",
-                    @params = new
-                    {
-                        logName = "http_access",
-                        query = new { from = fromIso, to = toIso },
-                        fields,
-                        limit = 5000
-                    }
+                    logName,
+                    query = new { dateFrom = fromIso, dateTo = toIso },
+                    fields,
+                    limit = 5000
                 }
-            ),
-            (
-                "Logs.get named(http,query)",
-                new
+            }));
+
+            // Logs.get positional
+            attempts.Add(($"Logs.get positional({logName},query,fields,limit)", new
+            {
+                jsonrpc = "2.0",
+                id = $"lg-p-1-{logName}",
+                method = "Logs.get",
+                @params = new object[]
                 {
-                    jsonrpc = "2.0",
-                    id = "logs-3",
-                    method = "Logs.get",
-                    @params = new
-                    {
-                        logName = "http",
-                        query = new { from = fromIso, to = toIso }
-                    }
+                    logName,
+                    new { from = fromIso, to = toIso },
+                    fields,
+                    5000
                 }
-            ),
-            (
-                "Logs.get named(http_access,query)",
-                new
+            }));
+
+            // Logs.query named
+            attempts.Add(($"Logs.query named({logName})", new
+            {
+                jsonrpc = "2.0",
+                id = $"lq-n-1-{logName}",
+                method = "Logs.query",
+                @params = new
                 {
-                    jsonrpc = "2.0",
-                    id = "logs-4",
-                    method = "Logs.get",
-                    @params = new
-                    {
-                        logName = "http_access",
-                        query = new { from = fromIso, to = toIso }
-                    }
+                    logName,
+                    query = new { from = fromIso, to = toIso },
+                    fields,
+                    limit = 5000
                 }
-            ),
-            (
-                "Logs.get positional(http,query,fields,limit)",
-                new
+            }));
+
+            // LogReader.get named
+            attempts.Add(($"LogReader.get named({logName})", new
+            {
+                jsonrpc = "2.0",
+                id = $"lr-n-1-{logName}",
+                method = "LogReader.get",
+                @params = new
                 {
-                    jsonrpc = "2.0",
-                    id = "logs-5",
-                    method = "Logs.get",
-                    @params = new object[]
-                    {
-                        "http",
-                        new { from = fromIso, to = toIso },
-                        fields,
-                        5000
-                    }
+                    logName,
+                    from = fromIso,
+                    to = toIso,
+                    fields,
+                    limit = 5000
                 }
-            ),
-            (
-                "Logs.get positional(http_access,query,fields,limit)",
-                new
-                {
-                    jsonrpc = "2.0",
-                    id = "logs-6",
-                    method = "Logs.get",
-                    @params = new object[]
-                    {
-                        "http_access",
-                        new { from = fromIso, to = toIso },
-                        fields,
-                        5000
-                    }
-                }
-            ),
-            (
-                "Logs.get named(http only)",
-                new
-                {
-                    jsonrpc = "2.0",
-                    id = "logs-7",
-                    method = "Logs.get",
-                    @params = new { logName = "http" }
-                }
-            ),
-            (
-                "Logs.get positional(http only)",
-                new
-                {
-                    jsonrpc = "2.0",
-                    id = "logs-8",
-                    method = "Logs.get",
-                    @params = new object[] { "http" }
-                }
-            )
-        };
+            }));
+
+            // Logs.get minimal
+            attempts.Add(($"Logs.get named({logName} only)", new
+            {
+                jsonrpc = "2.0",
+                id = $"lg-n-3-{logName}",
+                method = "Logs.get",
+                @params = new { logName }
+            }));
+        }
+
+        // Особый вариант: полностью без params (в некоторых API может вернуть default page)
+        attempts.Add(("Logs.get no-params", new
+        {
+            jsonrpc = "2.0",
+            id = "lg-none",
+            method = "Logs.get",
+            @params = new { }
+        }));
+
+        return attempts;
     }
 
     private async Task<JsonDocument> SendJsonRpcAsync(string url, object payload, CancellationToken cancellationToken)
@@ -236,7 +223,10 @@ public sealed class KerioJsonRpcClient
             Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
         };
 
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        if (!string.IsNullOrWhiteSpace(token))
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        }
 
         using var response = await _httpClient.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
@@ -260,12 +250,12 @@ public sealed class KerioJsonRpcClient
             return true;
         }
 
-        if (TryGetArray(result, out items, "items", "list", "entries", "data", "logs", "records"))
+        if (TryGetArray(result, out items, "items", "list", "entries", "data", "logs", "records", "rows"))
         {
             return true;
         }
 
-        if (TryGetArray(root, out items, "items", "list", "entries", "data", "logs", "records"))
+        if (TryGetArray(root, out items, "items", "list", "entries", "data", "logs", "records", "rows"))
         {
             return true;
         }
@@ -296,11 +286,11 @@ public sealed class KerioJsonRpcClient
         {
             logs.Add(new InternetLogEntry
             {
-                Timestamp = ReadDate(item, "timestamp", "time", "date"),
-                Username = ReadString(item, "user", "username", "srcUser", "account"),
-                Url = ReadString(item, "url", "uri", "request", "requestUrl"),
-                Category = ReadString(item, "category", "contentCategory", "rule"),
-                Bytes = ReadLong(item, "bytes", "size", "transferred", "sent")
+                Timestamp = ReadDate(item, "timestamp", "time", "date", "eventTime"),
+                Username = ReadString(item, "user", "username", "srcUser", "account", "userName"),
+                Url = ReadString(item, "url", "uri", "request", "requestUrl", "target"),
+                Category = ReadString(item, "category", "contentCategory", "rule", "policy"),
+                Bytes = ReadLong(item, "bytes", "size", "transferred", "sent", "rxBytes", "txBytes")
             });
         }
 
