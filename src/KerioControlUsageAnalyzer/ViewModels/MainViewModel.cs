@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Net.Http;
 using KerioControlUsageAnalyzer.Infrastructure;
 using KerioControlUsageAnalyzer.Models;
 using KerioControlUsageAnalyzer.Services;
@@ -7,7 +8,6 @@ namespace KerioControlUsageAnalyzer.ViewModels;
 
 public sealed class MainViewModel : ObservableObject
 {
-    private readonly HttpClient _httpClient = new();
     private readonly LogAnalysisService _analysisService = new();
 
     private bool _isBusy;
@@ -71,7 +71,9 @@ public sealed class MainViewModel : ObservableObject
             StatusMessage = "Подключение к KerioControl...";
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
-            var collector = new LogCollectorService(new KerioJsonRpcClient(_httpClient));
+            using var httpClient = CreateHttpClient(Config.IgnoreTlsCertificateErrors);
+            var collector = new LogCollectorService(new KerioJsonRpcClient(httpClient));
+
             var logs = await collector.CollectAsync(
                 Config,
                 FromDate.Value.Date,
@@ -92,6 +94,10 @@ public sealed class MainViewModel : ObservableObject
 
             StatusMessage = $"Загружено записей: {Logs.Count}. Пользователей в сводке: {UserSummaries.Count}.";
         }
+        catch (HttpRequestException ex) when (ContainsSslError(ex))
+        {
+            StatusMessage = "Ошибка SSL/TLS. Включите 'Игнорировать ошибки TLS' или установите доверенный сертификат на KerioControl.";
+        }
         catch (Exception ex)
         {
             StatusMessage = $"Ошибка: {ex.Message}";
@@ -101,5 +107,25 @@ public sealed class MainViewModel : ObservableObject
             _isBusy = false;
             LoadLogsCommand.RaiseCanExecuteChanged();
         }
+    }
+
+    private static HttpClient CreateHttpClient(bool ignoreTlsCertificateErrors)
+    {
+        var handler = new HttpClientHandler();
+
+        if (ignoreTlsCertificateErrors)
+        {
+            handler.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
+        }
+
+        return new HttpClient(handler, disposeHandler: true);
+    }
+
+    private static bool ContainsSslError(HttpRequestException ex)
+    {
+        var text = ex.ToString();
+        return text.Contains("SSL", StringComparison.OrdinalIgnoreCase)
+               || text.Contains("TLS", StringComparison.OrdinalIgnoreCase)
+               || text.Contains("certificate", StringComparison.OrdinalIgnoreCase);
     }
 }

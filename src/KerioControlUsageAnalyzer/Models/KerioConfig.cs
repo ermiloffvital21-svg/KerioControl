@@ -7,4 +7,6 @@ public sealed class KerioConfig
     public string Username { get; set; } = "admin";
 
     public string Password { get; set; } = string.Empty;
+
+    public bool IgnoreTlsCertificateErrors { get; set; } = true;
 }
