@@ -28,7 +28,7 @@
 
 ## Важные замечания по KerioControl 9.5
 
-- В разных сборках KerioControl могут отличаться названия методов и схема ответа API. Клиент теперь динамически пытается определить доступные log-методы через discovery (`system.listMethods`/`system.describe`/`Api.getMethods`) и затем подбирает несколько форм вызова (`query`, `from/to`, `filter/page`, `start/count`, named/positional, payload без `params`) для `http`/`http_access`/`web`.
+- В разных сборках KerioControl могут отличаться названия методов и схема ответа API. Клиент теперь динамически пытается определить доступные log-методы через discovery (`system.listMethods`/`system.describe`/`Api.getMethods`) и затем подбирает несколько форм вызова (`query`, `from/to`, `filter/page`, `start/count`, named/positional, payload без `params`) для `http`/`http_access`/`web`, включая Kerio-style `query.conditions + sortBy + start/limit`.
 - Если ваш сервер использует cookie-сессию вместо Bearer token, скорректируйте авторизацию в `KerioJsonRpcClient`.
 - Диагностика JSON-RPC ошибок включает `error.data`, если сервер его возвращает (полезно для разбора `Invalid params`).
 - По умолчанию в приложении включена опция игнорирования TLS-ошибок (удобно для self-signed). Для продакшена рекомендуется выключить эту опцию и установить доверенный сертификат.
