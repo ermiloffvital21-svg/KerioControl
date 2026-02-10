@@ -104,123 +104,108 @@ public sealed class KerioJsonRpcClient
 
         foreach (var logName in logNames)
         {
-            // Варианты с "logName"
-            attempts.Add((
-                $"Logs.get(logName={logName}, query.from/to iso)",
-                BuildPayload("Logs.get", new
+            attempts.Add(($"Logs.get(logName={logName}, query.from/to iso)", BuildPayload("Logs.get", new
+            {
+                logName,
+                query = new { from = fromIso, to = toIso },
+                fields,
+                limit = 5000
+            })));
+
+            attempts.Add(($"Logs.get(logName={logName}, query.from/to unix)", BuildPayload("Logs.get", new
+            {
+                logName,
+                query = new { from = fromUnix, to = toUnix },
+                fields,
+                limit = 5000
+            })));
+
+            attempts.Add(($"Logs.get(logName={logName}, from/to+start/count)", BuildPayload("Logs.get", new
+            {
+                logName,
+                from = fromUnix,
+                to = toUnix,
+                start = 0,
+                count = 5000,
+                fields
+            })));
+
+            attempts.Add(($"Logs.get(logName={logName}, from/to+offset/limit)", BuildPayload("Logs.get", new
+            {
+                logName,
+                from = fromIso,
+                to = toIso,
+                offset = 0,
+                limit = 5000,
+                fields
+            })));
+
+            attempts.Add(($"Logs.get(logName={logName}, filter.timestamp,page)", BuildPayload("Logs.get", new
+            {
+                logName,
+                filter = new { timestamp = new { from = fromUnix, to = toUnix } },
+                page = new { offset = 0, limit = 5000 },
+                fields
+            })));
+
+            attempts.Add(($"Logs.get(name={logName}, query.from/to)", BuildPayload("Logs.get", new
+            {
+                name = logName,
+                query = new { from = fromIso, to = toIso },
+                fields,
+                limit = 5000
+            })));
+
+            attempts.Add(($"Logs.get(type={logName}, query.from/to)", BuildPayload("Logs.get", new
+            {
+                type = logName,
+                query = new { from = fromIso, to = toIso },
+                fields,
+                limit = 5000
+            })));
+
+            attempts.Add(($"Logs.get positional(object:{logName})", BuildPayload("Logs.get", new object[]
+            {
+                new
                 {
                     logName,
                     query = new { from = fromIso, to = toIso },
                     fields,
                     limit = 5000
-                })));
+                }
+            })));
 
-            attempts.Add((
-                $"Logs.get(logName={logName}, query.from/to unix)",
-                BuildPayload("Logs.get", new
-                {
-                    logName,
-                    query = new { from = fromUnix, to = toUnix },
-                    fields,
-                    limit = 5000
-                })));
+            attempts.Add(($"Logs.get positional({logName},query,fields,limit)", BuildPayload("Logs.get", new object[]
+            {
+                logName,
+                new { from = fromIso, to = toIso },
+                fields,
+                5000
+            })));
 
-            attempts.Add((
-                $"Logs.get(logName={logName}, top-level from/to iso)",
-                BuildPayload("Logs.get", new
-                {
-                    logName,
-                    from = fromIso,
-                    to = toIso,
-                    fields,
-                    limit = 5000
-                })));
+            attempts.Add(($"Logs.get positional({logName},from,to,start,count)", BuildPayload("Logs.get", new object[]
+            {
+                logName,
+                fromUnix,
+                toUnix,
+                0,
+                5000
+            })));
 
-            attempts.Add((
-                $"Logs.get(logName={logName}, top-level from/to unix)",
-                BuildPayload("Logs.get", new
-                {
-                    logName,
-                    from = fromUnix,
-                    to = toUnix,
-                    fields,
-                    limit = 5000
-                })));
-
-            attempts.Add((
-                $"Logs.get(logName={logName}, query.dateFrom/dateTo)",
-                BuildPayload("Logs.get", new
-                {
-                    logName,
-                    query = new { dateFrom = fromIso, dateTo = toIso },
-                    fields,
-                    limit = 5000
-                })));
-
-            // Варианты с альтернативными ключами имени лога
-            attempts.Add((
-                $"Logs.get(name={logName}, query.from/to iso)",
-                BuildPayload("Logs.get", new
-                {
-                    name = logName,
-                    query = new { from = fromIso, to = toIso },
-                    fields,
-                    limit = 5000
-                })));
-
-            attempts.Add((
-                $"Logs.get(type={logName}, query.from/to iso)",
-                BuildPayload("Logs.get", new
-                {
-                    type = logName,
-                    query = new { from = fromIso, to = toIso },
-                    fields,
-                    limit = 5000
-                })));
-
-            // Варианты filter/page
-            attempts.Add((
-                $"Logs.get(logName={logName}, filter.timestamp, page)",
-                BuildPayload("Logs.get", new
-                {
-                    logName,
-                    filter = new
-                    {
-                        timestamp = new { from = fromUnix, to = toUnix }
-                    },
-                    fields,
-                    page = new { offset = 0, limit = 5000 }
-                })));
-
-            // Positional array
-            attempts.Add((
-                $"Logs.get positional({logName}, from,to,fields,limit)",
-                BuildPayload("Logs.get", new object[] { logName, fromUnix, toUnix, fields, 5000 })));
-
-            attempts.Add((
-                $"Logs.get positional({logName}, query,fields,limit)",
-                BuildPayload("Logs.get", new object[] { logName, new { from = fromIso, to = toIso }, fields, 5000 })));
-
-            // Метод-синоним
-            attempts.Add((
-                $"LogReader.get({logName}, from/to)",
-                BuildPayload("LogReader.get", new
-                {
-                    logName,
-                    from = fromUnix,
-                    to = toUnix,
-                    fields,
-                    limit = 5000
-                })));
-
-            // Минимальные
-            attempts.Add((
-                $"Logs.get(logName={logName})",
-                BuildPayload("Logs.get", new { logName })));
+            attempts.Add(($"Logs.get(logName={logName})", BuildPayload("Logs.get", new { logName })));
+            attempts.Add(($"LogReader.get(logName={logName},from,to)", BuildPayload("LogReader.get", new
+            {
+                logName,
+                from = fromUnix,
+                to = toUnix,
+                fields,
+                limit = 5000
+            })));
         }
 
         attempts.Add(("Logs.get(empty params)", BuildPayload("Logs.get", new { })));
         attempts.Add(("Logs.get(positional empty)", BuildPayload("Logs.get", Array.Empty<object>())));
+        attempts.Add(("Logs.get(no params member)", BuildPayloadWithoutParams("Logs.get")));
 
         return attempts;
     }
@@ -233,6 +218,16 @@ public sealed class KerioJsonRpcClient
             id = Guid.NewGuid().ToString("N"),
             method,
             @params = parameters
+        };
+    }
+
+    private static object BuildPayloadWithoutParams(string method)
+    {
+        return new
+        {
+            jsonrpc = "2.0",
+            id = Guid.NewGuid().ToString("N"),
+            method
         };
     }
 
@@ -346,7 +341,13 @@ public sealed class KerioJsonRpcClient
             ? codeElement.ToString()
             : "n/a";
 
-        throw new InvalidOperationException($"{attemptName}: JSON-RPC error (code={code}): {message}");
+        var details = error.TryGetProperty("data", out var dataElement)
+            ? dataElement.ToString()
+            : string.Empty;
+
+        var detailsSuffix = string.IsNullOrWhiteSpace(details) ? string.Empty : $" | data: {details}";
+
+        throw new InvalidOperationException($"{attemptName}: JSON-RPC error (code={code}): {message}{detailsSuffix}");
     }
 
     private static string BuildApiUrl(string baseUrl)
