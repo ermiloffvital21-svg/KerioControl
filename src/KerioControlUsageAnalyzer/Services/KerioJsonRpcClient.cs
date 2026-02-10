@@ -7,6 +7,7 @@ namespace KerioControlUsageAnalyzer.Services;
 
 public sealed class KerioJsonRpcClient
 {
+    private const int MaxAttempts = 60;
     private readonly HttpClient _httpClient;
 
     public KerioJsonRpcClient(HttpClient httpClient)
@@ -21,12 +22,7 @@ public sealed class KerioJsonRpcClient
         {
             userName = config.Username,
             password = config.Password,
-            application = new
-            {
-                vendor = "Internal",
-                name = "KerioControlUsageAnalyzer",
-                version = "1.0"
-            }
+            application = new { vendor = "Internal", name = "KerioControlUsageAnalyzer", version = "1.0" }
         }), cancellationToken);
 
         EnsureNoJsonRpcError(response.RootElement, "Session.login");
@@ -58,11 +54,12 @@ public sealed class KerioJsonRpcClient
     {
         var url = BuildApiUrl(config.BaseUrl);
         var discoveredMethods = await DiscoverLogMethodsAsync(url, token, cancellationToken);
-        var attempts = BuildLogRequestPayloads(from, to, discoveredMethods);
+        var attempts = BuildLogRequestPayloads(from, to, discoveredMethods).Take(MaxAttempts).ToList();
         var attemptErrors = new List<string>();
 
         foreach (var attempt in attempts)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             try
             {
                 using var doc = await SendAuthorizedJsonRpcAsync(url, token, attempt.Payload, cancellationToken);
@@ -84,7 +81,7 @@ public sealed class KerioJsonRpcClient
 
         var discovered = discoveredMethods.Count == 0 ? "n/a" : string.Join(", ", discoveredMethods);
         throw new InvalidOperationException(
-            $"Не удалось получить логи KerioControl. Обнаруженные методы логов: {discovered}. Ошибки: {string.Join("; ", attemptErrors)}");
+            $"Не удалось получить логи KerioControl. Попыток: {attempts.Count}. Обнаруженные методы логов: {discovered}. Ошибки: {string.Join("; ", attemptErrors)}");
     }
 
     private static IReadOnlyList<(string AttemptName, object Payload)> BuildLogRequestPayloads(
@@ -92,97 +89,75 @@ public sealed class KerioJsonRpcClient
         DateTime to,
         IReadOnlyList<string> discoveredMethods)
     {
-        var methods = discoveredMethods.Count > 0
-            ? discoveredMethods
-            : new[] { "Logs.get", "Logs.read", "Log.get" };
-
+        var methods = discoveredMethods.Count > 0 ? discoveredMethods : new[] { "Logs.get", "Logs.read", "Log.get" };
         var fromIso = from.ToUniversalTime().ToString("O");
         var toIso = to.ToUniversalTime().ToString("O");
         var fromUnix = new DateTimeOffset(from.ToUniversalTime()).ToUnixTimeSeconds();
         var toUnix = new DateTimeOffset(to.ToUniversalTime()).ToUnixTimeSeconds();
 
         var fields = new[] { "timestamp", "user", "url", "category", "bytes" };
-        var logNames = new[] { "http", "http_access", "web", "access", "traffic" };
-        var selectorKeys = new[] { "logName", "name", "type", "log", "logType", "kind" };
-        var containers = new[] { "", "query", "filter", "criteria", "condition" };
-
-        var rangeVariants = new (string FromKey, object FromValue, string ToKey, object ToValue, string Label)[]
-        {
-            ("from", fromIso, "to", toIso, "iso from/to"),
-            ("from", fromUnix, "to", toUnix, "unix from/to"),
-            ("dateFrom", fromIso, "dateTo", toIso, "iso dateFrom/dateTo"),
-            ("begin", fromIso, "end", toIso, "iso begin/end"),
-            ("since", fromUnix, "till", toUnix, "unix since/till")
-        };
-
-        var pagingVariants = new (string K1, object V1, string K2, object V2, string Label)[]
-        {
-            ("start", 0, "limit", 5000, "start/limit"),
-            ("offset", 0, "count", 5000, "offset/count"),
-            ("offset", 0, "limit", 5000, "offset/limit"),
-            ("page", 1, "pageSize", 5000, "page/pageSize")
-        };
-
+        var logNames = new[] { "http", "http_access", "web", "access" };
         var attempts = new List<(string AttemptName, object Payload)>();
 
         foreach (var method in methods)
         {
             foreach (var logName in logNames)
             {
-                foreach (var selectorKey in selectorKeys)
+                attempts.Add(($"{method}(logName={logName}, query.from/to)", BuildPayload(method, new
                 {
-                    foreach (var range in rangeVariants)
-                    {
-                        foreach (var container in containers)
-                        {
-                            foreach (var paging in pagingVariants)
-                            {
-                                var map = NewMap();
-                                map[selectorKey] = logName;
-                                map["fields"] = fields;
-                                map[paging.K1] = paging.V1;
-                                map[paging.K2] = paging.V2;
+                    logName,
+                    query = new { from = fromIso, to = toIso },
+                    fields,
+                    start = 0,
+                    limit = 5000
+                })));
 
-                                if (string.IsNullOrWhiteSpace(container))
-                                {
-                                    map[range.FromKey] = range.FromValue;
-                                    map[range.ToKey] = range.ToValue;
-                                }
-                                else
-                                {
-                                    map[container] = NewMap((range.FromKey, range.FromValue), (range.ToKey, range.ToValue));
-                                }
+                attempts.Add(($"{method}(logName={logName}, query.dateFrom/dateTo)", BuildPayload(method, new
+                {
+                    logName,
+                    query = new { dateFrom = fromIso, dateTo = toIso },
+                    fields,
+                    start = 0,
+                    limit = 5000
+                })));
 
-                                attempts.Add(($"{method}({selectorKey}={logName}, {container}:{range.Label}, {paging.Label})", BuildPayload(method, map)));
-                            }
-                        }
-                    }
-                }
+                attempts.Add(($"{method}(logName={logName}, top-level from/to)", BuildPayload(method, new
+                {
+                    logName,
+                    from = fromUnix,
+                    to = toUnix,
+                    offset = 0,
+                    count = 5000,
+                    fields
+                })));
 
-                // Positional variants
-                attempts.Add(($"{method} positional({logName}, fromUnix, toUnix, start, limit)",
-                    BuildPayload(method, new object[] { logName, fromUnix, toUnix, 0, 5000 })));
+                attempts.Add(($"{method}(name={logName}, filter)", BuildPayload(method, new
+                {
+                    name = logName,
+                    filter = new { from = fromIso, to = toIso },
+                    start = 0,
+                    limit = 5000,
+                    fields
+                })));
 
-                attempts.Add(($"{method} positional({logName}, object)",
-                    BuildPayload(method, new object[]
-                    {
-                        logName,
-                        NewMap(("from", fromIso), ("to", toIso), ("start", 0), ("limit", 5000), ("fields", fields))
-                    })));
+                attempts.Add(($"{method} positional({logName}, query, start, limit)", BuildPayload(method, new object[]
+                {
+                    logName,
+                    new { from = fromIso, to = toIso },
+                    0,
+                    5000
+                })));
 
-                attempts.Add(($"{method}({logName} only)", BuildPayload(method, NewMap(("logName", logName)))));
+                attempts.Add(($"{method}({logName} only)", BuildPayload(method, new { logName })));
             }
 
-            // No-selector attempts
-            foreach (var range in rangeVariants)
+            attempts.Add(($"{method}(query-only)", BuildPayload(method, new
             {
-                foreach (var paging in pagingVariants)
-                {
-                    var q = NewMap((range.FromKey, range.FromValue), (range.ToKey, range.ToValue));
-                    var m1 = NewMap(("query", q), (paging.K1, paging.V1), (paging.K2, paging.V2), ("fields", fields));
-                    attempts.Add(($"{method}(query only, {range.Label}, {paging.Label})", BuildPayload(method, m1)));
-                }
-            }
+                query = new { from = fromIso, to = toIso },
+                start = 0,
+                limit = 5000,
+                fields
+            })));
 
             attempts.Add(($"{method}(empty params)", BuildPayload(method, new { })));
             attempts.Add(($"{method}(no params member)", BuildPayloadWithoutParams(method)));
@@ -211,22 +186,18 @@ public sealed class KerioJsonRpcClient
                     continue;
                 }
 
-                foreach (var method in methods)
+                foreach (var method in methods.Where(m => m.Contains("log", StringComparison.OrdinalIgnoreCase)))
                 {
-                    if (method.Contains("log", StringComparison.OrdinalIgnoreCase))
-                    {
-                        candidates.Add(method);
-                    }
+                    candidates.Add(method);
                 }
             }
             catch
             {
-                // ignore and continue
+                // ignore discovery errors
             }
         }
 
-        return candidates
-            .OrderBy(x => x.Contains("Logs.get", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+        return candidates.OrderBy(x => x.Contains("Logs.get", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
             .ThenBy(x => x, StringComparer.Ordinal)
             .Take(8)
             .ToArray();
@@ -235,31 +206,20 @@ public sealed class KerioJsonRpcClient
     private static bool TryExtractMethodNames(JsonElement root, out IReadOnlyList<string> methods)
     {
         var list = new List<string>();
-
         static void Collect(JsonElement e, List<string> target)
         {
-            if (e.ValueKind != JsonValueKind.Array)
-            {
-                return;
-            }
-
+            if (e.ValueKind != JsonValueKind.Array) return;
             foreach (var item in e.EnumerateArray())
             {
                 if (item.ValueKind == JsonValueKind.String)
                 {
                     var s = item.GetString();
-                    if (!string.IsNullOrWhiteSpace(s))
-                    {
-                        target.Add(s);
-                    }
+                    if (!string.IsNullOrWhiteSpace(s)) target.Add(s);
                 }
                 else if (item.ValueKind == JsonValueKind.Object && item.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String)
                 {
                     var s = n.GetString();
-                    if (!string.IsNullOrWhiteSpace(s))
-                    {
-                        target.Add(s);
-                    }
+                    if (!string.IsNullOrWhiteSpace(s)) target.Add(s);
                 }
             }
         }
@@ -269,10 +229,7 @@ public sealed class KerioJsonRpcClient
             Collect(result, list);
             if (result.ValueKind == JsonValueKind.Object)
             {
-                foreach (var prop in result.EnumerateObject())
-                {
-                    Collect(prop.Value, list);
-                }
+                foreach (var prop in result.EnumerateObject()) Collect(prop.Value, list);
             }
         }
 
@@ -280,31 +237,8 @@ public sealed class KerioJsonRpcClient
         return methods.Count > 0;
     }
 
-    private static Dictionary<string, object?> NewMap(params (string Key, object? Value)[] entries)
-    {
-        var map = new Dictionary<string, object?>(StringComparer.Ordinal);
-        foreach (var (key, value) in entries)
-        {
-            map[key] = value;
-        }
-
-        return map;
-    }
-
-    private static object BuildPayload(string method, object parameters) => new
-    {
-        jsonrpc = "2.0",
-        id = Guid.NewGuid().ToString("N"),
-        method,
-        @params = parameters
-    };
-
-    private static object BuildPayloadWithoutParams(string method) => new
-    {
-        jsonrpc = "2.0",
-        id = Guid.NewGuid().ToString("N"),
-        method
-    };
+    private static object BuildPayload(string method, object parameters) => new { jsonrpc = "2.0", id = Guid.NewGuid().ToString("N"), method, @params = parameters };
+    private static object BuildPayloadWithoutParams(string method) => new { jsonrpc = "2.0", id = Guid.NewGuid().ToString("N"), method };
 
     private async Task<JsonDocument> SendJsonRpcAsync(string url, object payload, CancellationToken cancellationToken)
     {
@@ -337,10 +271,7 @@ public sealed class KerioJsonRpcClient
     private static bool TryExtractLogItems(JsonElement root, out JsonElement items)
     {
         items = default;
-        if (!root.TryGetProperty("result", out var result))
-        {
-            return false;
-        }
+        if (!root.TryGetProperty("result", out var result)) return false;
 
         if (result.ValueKind == JsonValueKind.Array)
         {
@@ -348,15 +279,8 @@ public sealed class KerioJsonRpcClient
             return true;
         }
 
-        if (TryGetArray(result, out items, "items", "list", "entries", "data", "logs", "records", "rows"))
-        {
-            return true;
-        }
-
-        if (TryGetArray(root, out items, "items", "list", "entries", "data", "logs", "records", "rows"))
-        {
-            return true;
-        }
+        if (TryGetArray(result, out items, "items", "list", "entries", "data", "logs", "records", "rows")) return true;
+        if (TryGetArray(root, out items, "items", "list", "entries", "data", "logs", "records", "rows")) return true;
 
         return false;
     }
@@ -379,7 +303,6 @@ public sealed class KerioJsonRpcClient
     private static List<InternetLogEntry> ParseLogs(JsonElement items)
     {
         var logs = new List<InternetLogEntry>();
-
         foreach (var item in items.EnumerateArray())
         {
             logs.Add(new InternetLogEntry
@@ -397,23 +320,11 @@ public sealed class KerioJsonRpcClient
 
     private static void EnsureNoJsonRpcError(JsonElement root, string attemptName)
     {
-        if (!root.TryGetProperty("error", out var error))
-        {
-            return;
-        }
+        if (!root.TryGetProperty("error", out var error)) return;
 
-        var message = error.TryGetProperty("message", out var messageElement)
-            ? messageElement.GetString()
-            : error.ToString();
-
-        var code = error.TryGetProperty("code", out var codeElement)
-            ? codeElement.ToString()
-            : "n/a";
-
-        var details = error.TryGetProperty("data", out var dataElement)
-            ? dataElement.ToString()
-            : string.Empty;
-
+        var message = error.TryGetProperty("message", out var messageElement) ? messageElement.GetString() : error.ToString();
+        var code = error.TryGetProperty("code", out var codeElement) ? codeElement.ToString() : "n/a";
+        var details = error.TryGetProperty("data", out var dataElement) ? dataElement.ToString() : string.Empty;
         var detailsSuffix = string.IsNullOrWhiteSpace(details) ? string.Empty : $" | data: {details}";
 
         throw new InvalidOperationException($"{attemptName}: JSON-RPC error (code={code}): {message}{detailsSuffix}");
@@ -429,20 +340,10 @@ public sealed class KerioJsonRpcClient
     {
         foreach (var propertyName in propertyNames)
         {
-            if (!item.TryGetProperty(propertyName, out var property))
-            {
-                continue;
-            }
+            if (!item.TryGetProperty(propertyName, out var property)) continue;
 
-            if (property.ValueKind == JsonValueKind.String && DateTime.TryParse(property.GetString(), out var parsedString))
-            {
-                return parsedString;
-            }
-
-            if (property.ValueKind == JsonValueKind.Number && property.TryGetInt64(out var unixSeconds))
-            {
-                return DateTimeOffset.FromUnixTimeSeconds(unixSeconds).DateTime;
-            }
+            if (property.ValueKind == JsonValueKind.String && DateTime.TryParse(property.GetString(), out var parsedString)) return parsedString;
+            if (property.ValueKind == JsonValueKind.Number && property.TryGetInt64(out var unixSeconds)) return DateTimeOffset.FromUnixTimeSeconds(unixSeconds).DateTime;
         }
 
         return DateTime.MinValue;
@@ -452,10 +353,7 @@ public sealed class KerioJsonRpcClient
     {
         foreach (var propertyName in propertyNames)
         {
-            if (item.TryGetProperty(propertyName, out var property))
-            {
-                return property.GetString() ?? string.Empty;
-            }
+            if (item.TryGetProperty(propertyName, out var property)) return property.GetString() ?? string.Empty;
         }
 
         return string.Empty;
@@ -465,20 +363,9 @@ public sealed class KerioJsonRpcClient
     {
         foreach (var propertyName in propertyNames)
         {
-            if (!item.TryGetProperty(propertyName, out var property))
-            {
-                continue;
-            }
-
-            if (property.ValueKind == JsonValueKind.Number && property.TryGetInt64(out var numberValue))
-            {
-                return numberValue;
-            }
-
-            if (property.ValueKind == JsonValueKind.String && long.TryParse(property.GetString(), out var parsedString))
-            {
-                return parsedString;
-            }
+            if (!item.TryGetProperty(propertyName, out var property)) continue;
+            if (property.ValueKind == JsonValueKind.Number && property.TryGetInt64(out var numberValue)) return numberValue;
+            if (property.ValueKind == JsonValueKind.String && long.TryParse(property.GetString(), out var parsedString)) return parsedString;
         }
 
         return 0;

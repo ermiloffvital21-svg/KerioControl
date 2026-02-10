@@ -28,6 +28,7 @@
 
 ## Важные замечания по KerioControl 9.5
 
+- Для предотвращения `A task was canceled` клиент ограничивает количество fallback-попыток и использует увеличенный таймаут запроса; при таймауте UI показывает отдельное понятное сообщение.
 - В разных сборках KerioControl могут отличаться названия методов и схема ответа API. Клиент теперь динамически пытается определить доступные log-методы через discovery (`system.listMethods`/`system.describe`/`Api.getMethods`) и затем подбирает несколько форм вызова (`query`, `from/to`, `filter/page`, `start/count`, named/positional, payload без `params`) для `http`/`http_access`/`web`, включая расширенный перебор ключей (`logName/name/type/log/logType`), контейнеров (`query/filter/criteria`) и диапазонов времени (`from/to`, `dateFrom/dateTo`, `begin/end`).
 - Если ваш сервер использует cookie-сессию вместо Bearer token, скорректируйте авторизацию в `KerioJsonRpcClient`.
 - Диагностика JSON-RPC ошибок включает `error.data`, если сервер его возвращает (полезно для разбора `Invalid params`).

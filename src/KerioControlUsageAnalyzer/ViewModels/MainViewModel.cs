@@ -70,7 +70,7 @@ public sealed class MainViewModel : ObservableObject
         {
             StatusMessage = "Подключение к KerioControl...";
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(4));
             using var httpClient = CreateHttpClient(Config.IgnoreTlsCertificateErrors);
             var collector = new LogCollectorService(new KerioJsonRpcClient(httpClient));
 
@@ -98,6 +98,14 @@ public sealed class MainViewModel : ObservableObject
         {
             StatusMessage = "Ошибка SSL/TLS. Включите 'Игнорировать ошибки TLS' или установите доверенный сертификат на KerioControl.";
         }
+        catch (TaskCanceledException)
+        {
+            StatusMessage = "Ошибка: операция отменена по таймауту. Уменьшите период выборки (например, 1 день) и повторите.";
+        }
+        catch (OperationCanceledException)
+        {
+            StatusMessage = "Ошибка: операция была отменена.";
+        }
         catch (Exception ex)
         {
             StatusMessage = $"Ошибка: {ex.Message}";
@@ -118,7 +126,12 @@ public sealed class MainViewModel : ObservableObject
             handler.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
         }
 
-        return new HttpClient(handler, disposeHandler: true);
+        var client = new HttpClient(handler, disposeHandler: true)
+        {
+            Timeout = TimeSpan.FromMinutes(3)
+        };
+
+        return client;
     }
 
     private static bool ContainsSslError(HttpRequestException ex)
