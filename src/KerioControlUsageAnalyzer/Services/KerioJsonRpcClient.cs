@@ -45,15 +45,14 @@ public sealed class KerioJsonRpcClient
 
         if (result.TryGetProperty("token", out var tokenElement))
         {
-            return tokenElement.GetString() ?? throw new InvalidOperationException("Kerio returned empty session token.");
+            return tokenElement.GetString() ?? string.Empty;
         }
 
         if (result.TryGetProperty("sessionToken", out var sessionTokenElement))
         {
-            return sessionTokenElement.GetString() ?? throw new InvalidOperationException("Kerio returned empty session token.");
+            return sessionTokenElement.GetString() ?? string.Empty;
         }
 
-        // Для некоторых сборок token может не требоваться (cookie-сессия).
         return string.Empty;
     }
 
@@ -89,117 +88,152 @@ public sealed class KerioJsonRpcClient
             }
         }
 
-        var allErrors = string.Join("; ", attemptErrors);
-        throw new InvalidOperationException($"Не удалось получить логи KerioControl. {allErrors}");
+        throw new InvalidOperationException($"Не удалось получить логи KerioControl. {string.Join("; ", attemptErrors)}");
     }
 
     private static IReadOnlyList<(string AttemptName, object Payload)> BuildLogRequestPayloads(DateTime from, DateTime to)
     {
         var fromIso = from.ToUniversalTime().ToString("O");
         var toIso = to.ToUniversalTime().ToString("O");
+        var fromUnix = new DateTimeOffset(from.ToUniversalTime()).ToUnixTimeSeconds();
+        var toUnix = new DateTimeOffset(to.ToUniversalTime()).ToUnixTimeSeconds();
+
         var fields = new[] { "timestamp", "user", "url", "category", "bytes" };
         var logNames = new[] { "http", "http_access", "web" };
-
         var attempts = new List<(string AttemptName, object Payload)>();
 
         foreach (var logName in logNames)
         {
-            // Logs.get named
-            attempts.Add(($"Logs.get named({logName},query+fields+limit)", new
-            {
-                jsonrpc = "2.0",
-                id = $"lg-n-1-{logName}",
-                method = "Logs.get",
-                @params = new
+            // Варианты с "logName"
+            attempts.Add((
+                $"Logs.get(logName={logName}, query.from/to iso)",
+                BuildPayload("Logs.get", new
                 {
                     logName,
                     query = new { from = fromIso, to = toIso },
                     fields,
                     limit = 5000
-                }
-            }));
+                })));
 
-            // Logs.get named with dateFrom/dateTo
-            attempts.Add(($"Logs.get named({logName},dateFrom/dateTo)", new
-            {
-                jsonrpc = "2.0",
-                id = $"lg-n-2-{logName}",
-                method = "Logs.get",
-                @params = new
+            attempts.Add((
+                $"Logs.get(logName={logName}, query.from/to unix)",
+                BuildPayload("Logs.get", new
                 {
                     logName,
-                    query = new { dateFrom = fromIso, dateTo = toIso },
+                    query = new { from = fromUnix, to = toUnix },
                     fields,
                     limit = 5000
-                }
-            }));
+                })));
 
-            // Logs.get positional
-            attempts.Add(($"Logs.get positional({logName},query,fields,limit)", new
-            {
-                jsonrpc = "2.0",
-                id = $"lg-p-1-{logName}",
-                method = "Logs.get",
-                @params = new object[]
-                {
-                    logName,
-                    new { from = fromIso, to = toIso },
-                    fields,
-                    5000
-                }
-            }));
-
-            // Logs.query named
-            attempts.Add(($"Logs.query named({logName})", new
-            {
-                jsonrpc = "2.0",
-                id = $"lq-n-1-{logName}",
-                method = "Logs.query",
-                @params = new
-                {
-                    logName,
-                    query = new { from = fromIso, to = toIso },
-                    fields,
-                    limit = 5000
-                }
-            }));
-
-            // LogReader.get named
-            attempts.Add(($"LogReader.get named({logName})", new
-            {
-                jsonrpc = "2.0",
-                id = $"lr-n-1-{logName}",
-                method = "LogReader.get",
-                @params = new
+            attempts.Add((
+                $"Logs.get(logName={logName}, top-level from/to iso)",
+                BuildPayload("Logs.get", new
                 {
                     logName,
                     from = fromIso,
                     to = toIso,
                     fields,
                     limit = 5000
-                }
-            }));
+                })));
 
-            // Logs.get minimal
-            attempts.Add(($"Logs.get named({logName} only)", new
-            {
-                jsonrpc = "2.0",
-                id = $"lg-n-3-{logName}",
-                method = "Logs.get",
-                @params = new { logName }
-            }));
+            attempts.Add((
+                $"Logs.get(logName={logName}, top-level from/to unix)",
+                BuildPayload("Logs.get", new
+                {
+                    logName,
+                    from = fromUnix,
+                    to = toUnix,
+                    fields,
+                    limit = 5000
+                })));
+
+            attempts.Add((
+                $"Logs.get(logName={logName}, query.dateFrom/dateTo)",
+                BuildPayload("Logs.get", new
+                {
+                    logName,
+                    query = new { dateFrom = fromIso, dateTo = toIso },
+                    fields,
+                    limit = 5000
+                })));
+
+            // Варианты с альтернативными ключами имени лога
+            attempts.Add((
+                $"Logs.get(name={logName}, query.from/to iso)",
+                BuildPayload("Logs.get", new
+                {
+                    name = logName,
+                    query = new { from = fromIso, to = toIso },
+                    fields,
+                    limit = 5000
+                })));
+
+            attempts.Add((
+                $"Logs.get(type={logName}, query.from/to iso)",
+                BuildPayload("Logs.get", new
+                {
+                    type = logName,
+                    query = new { from = fromIso, to = toIso },
+                    fields,
+                    limit = 5000
+                })));
+
+            // Варианты filter/page
+            attempts.Add((
+                $"Logs.get(logName={logName}, filter.timestamp, page)",
+                BuildPayload("Logs.get", new
+                {
+                    logName,
+                    filter = new
+                    {
+                        timestamp = new { from = fromUnix, to = toUnix }
+                    },
+                    fields,
+                    page = new { offset = 0, limit = 5000 }
+                })));
+
+            // Positional array
+            attempts.Add((
+                $"Logs.get positional({logName}, from,to,fields,limit)",
+                BuildPayload("Logs.get", new object[] { logName, fromUnix, toUnix, fields, 5000 })));
+
+            attempts.Add((
+                $"Logs.get positional({logName}, query,fields,limit)",
+                BuildPayload("Logs.get", new object[] { logName, new { from = fromIso, to = toIso }, fields, 5000 })));
+
+            // Метод-синоним
+            attempts.Add((
+                $"LogReader.get({logName}, from/to)",
+                BuildPayload("LogReader.get", new
+                {
+                    logName,
+                    from = fromUnix,
+                    to = toUnix,
+                    fields,
+                    limit = 5000
+                })));
+
+            // Минимальные
+            attempts.Add((
+                $"Logs.get(logName={logName})",
+                BuildPayload("Logs.get", new { logName })));
         }
 
-        // Особый вариант: полностью без params (в некоторых API может вернуть default page)
-        attempts.Add(("Logs.get no-params", new
-        {
-            jsonrpc = "2.0",
-            id = "lg-none",
-            method = "Logs.get",
-            @params = new { }
-        }));
+        attempts.Add(("Logs.get(empty params)", BuildPayload("Logs.get", new { })));
+        attempts.Add(("Logs.get(positional empty)", BuildPayload("Logs.get", Array.Empty<object>())));
 
         return attempts;
+    }
+
+    private static object BuildPayload(string method, object parameters)
+    {
+        return new
+        {
+            jsonrpc = "2.0",
+            id = Guid.NewGuid().ToString("N"),
+            method,
+            @params = parameters
+        };
     }
 
     private async Task<JsonDocument> SendJsonRpcAsync(string url, object payload, CancellationToken cancellationToken)
