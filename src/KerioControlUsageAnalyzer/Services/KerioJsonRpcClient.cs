@@ -35,7 +35,8 @@ public sealed class KerioJsonRpcClient
             }
         };
 
-        var response = await SendJsonRpcAsync(url, body, cancellationToken);
+        using var response = await SendJsonRpcAsync(url, body, cancellationToken);
+        EnsureNoJsonRpcError(response.RootElement, "Session.login");
 
         if (!response.RootElement.TryGetProperty("result", out var result))
         {
@@ -63,59 +64,82 @@ public sealed class KerioJsonRpcClient
         CancellationToken cancellationToken)
     {
         var url = BuildApiUrl(config.BaseUrl);
-        var payload = new
+
+        var attempts = BuildLogRequestPayloads(from, to);
+        var attemptErrors = new List<string>();
+
+        foreach (var attempt in attempts)
         {
-            jsonrpc = "2.0",
-            id = "logs",
-            method = "Logs.get",
-            @params = new
+            try
             {
-                logName = "http",
-                query = new
+                using var doc = await SendAuthorizedJsonRpcAsync(url, token, attempt.Payload, cancellationToken);
+                EnsureNoJsonRpcError(doc.RootElement, attempt.MethodName);
+
+                if (!TryExtractLogItems(doc.RootElement, out var items))
                 {
-                    from = from.ToUniversalTime().ToString("O"),
-                    to = to.ToUniversalTime().ToString("O")
-                },
-                fields = new[] { "timestamp", "user", "url", "category", "bytes" },
-                limit = 5000
+                    attemptErrors.Add($"{attempt.MethodName}: нет массива записей в ответе");
+                    continue;
+                }
+
+                var logs = ParseLogs(items);
+                if (logs.Count > 0)
+                {
+                    return logs;
+                }
+
+                // Пустой массив — корректный ответ (просто нет данных в периоде).
+                return logs;
             }
-        };
-
-        using var request = new HttpRequestMessage(HttpMethod.Post, url)
-        {
-            Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
-        };
-
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-
-        using var response = await _httpClient.SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
-
-        var json = await response.Content.ReadAsStringAsync(cancellationToken);
-        using var doc = JsonDocument.Parse(json);
-
-        if (!doc.RootElement.TryGetProperty("result", out var result) ||
-            !result.TryGetProperty("items", out var items) ||
-            items.ValueKind != JsonValueKind.Array)
-        {
-            throw new InvalidOperationException("Logs.get did not return result.items array. Проверьте доступность метода в вашей версии KerioControl.");
-        }
-
-        var logs = new List<InternetLogEntry>();
-
-        foreach (var item in items.EnumerateArray())
-        {
-            logs.Add(new InternetLogEntry
+            catch (InvalidOperationException ex)
             {
-                Timestamp = ReadDate(item, "timestamp"),
-                Username = ReadString(item, "user"),
-                Url = ReadString(item, "url"),
-                Category = ReadString(item, "category"),
-                Bytes = ReadLong(item, "bytes")
-            });
+                attemptErrors.Add($"{attempt.MethodName}: {ex.Message}");
+            }
         }
 
-        return logs;
+        var allErrors = string.Join("; ", attemptErrors);
+        throw new InvalidOperationException($"Не удалось получить логи KerioControl. {allErrors}");
+    }
+
+    private static IReadOnlyList<(string MethodName, object Payload)> BuildLogRequestPayloads(DateTime from, DateTime to)
+    {
+        var fromIso = from.ToUniversalTime().ToString("O");
+        var toIso = to.ToUniversalTime().ToString("O");
+
+        return new List<(string, object)>
+        {
+            (
+                "Logs.get",
+                new
+                {
+                    jsonrpc = "2.0",
+                    id = "logs-get",
+                    method = "Logs.get",
+                    @params = new
+                    {
+                        logName = "http",
+                        query = new { from = fromIso, to = toIso },
+                        fields = new[] { "timestamp", "user", "url", "category", "bytes" },
+                        limit = 5000
+                    }
+                }
+            ),
+            (
+                "Logs.get (http_access)",
+                new
+                {
+                    jsonrpc = "2.0",
+                    id = "logs-get-http-access",
+                    method = "Logs.get",
+                    @params = new
+                    {
+                        logName = "http_access",
+                        query = new { from = fromIso, to = toIso },
+                        fields = new[] { "timestamp", "user", "url", "category", "bytes" },
+                        limit = 5000
+                    }
+                }
+            )
+        };
     }
 
     private async Task<JsonDocument> SendJsonRpcAsync(string url, object payload, CancellationToken cancellationToken)
@@ -132,46 +156,160 @@ public sealed class KerioJsonRpcClient
         return JsonDocument.Parse(content);
     }
 
+    private async Task<JsonDocument> SendAuthorizedJsonRpcAsync(string url, string token, object payload, CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
+        };
+
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        return JsonDocument.Parse(content);
+    }
+
+    private static bool TryExtractLogItems(JsonElement root, out JsonElement items)
+    {
+        items = default;
+
+        if (!root.TryGetProperty("result", out var result))
+        {
+            return false;
+        }
+
+        if (result.ValueKind == JsonValueKind.Array)
+        {
+            items = result;
+            return true;
+        }
+
+        if (TryGetArray(result, out items, "items", "list", "entries", "data", "logs", "records"))
+        {
+            return true;
+        }
+
+        if (TryGetArray(root, out items, "items", "list", "entries", "data", "logs", "records"))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetArray(JsonElement obj, out JsonElement array, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (obj.TryGetProperty(name, out var candidate) && candidate.ValueKind == JsonValueKind.Array)
+            {
+                array = candidate;
+                return true;
+            }
+        }
+
+        array = default;
+        return false;
+    }
+
+    private static List<InternetLogEntry> ParseLogs(JsonElement items)
+    {
+        var logs = new List<InternetLogEntry>();
+
+        foreach (var item in items.EnumerateArray())
+        {
+            logs.Add(new InternetLogEntry
+            {
+                Timestamp = ReadDate(item, "timestamp", "time", "date"),
+                Username = ReadString(item, "user", "username", "srcUser", "account"),
+                Url = ReadString(item, "url", "uri", "request", "requestUrl"),
+                Category = ReadString(item, "category", "contentCategory", "rule"),
+                Bytes = ReadLong(item, "bytes", "size", "transferred", "sent")
+            });
+        }
+
+        return logs;
+    }
+
+    private static void EnsureNoJsonRpcError(JsonElement root, string methodName)
+    {
+        if (!root.TryGetProperty("error", out var error))
+        {
+            return;
+        }
+
+        var message = error.TryGetProperty("message", out var messageElement)
+            ? messageElement.GetString()
+            : error.ToString();
+
+        throw new InvalidOperationException($"{methodName}: {message}");
+    }
+
     private static string BuildApiUrl(string baseUrl)
     {
         var normalized = baseUrl.TrimEnd('/');
         return $"{normalized}/admin/api/jsonrpc";
     }
 
-    private static DateTime ReadDate(JsonElement item, string propertyName)
+    private static DateTime ReadDate(JsonElement item, params string[] propertyNames)
     {
-        if (!item.TryGetProperty(propertyName, out var property))
+        foreach (var propertyName in propertyNames)
         {
-            return DateTime.MinValue;
+            if (!item.TryGetProperty(propertyName, out var property))
+            {
+                continue;
+            }
+
+            if (property.ValueKind == JsonValueKind.String && DateTime.TryParse(property.GetString(), out var parsedString))
+            {
+                return parsedString;
+            }
+
+            if (property.ValueKind == JsonValueKind.Number && property.TryGetInt64(out var unixSeconds))
+            {
+                return DateTimeOffset.FromUnixTimeSeconds(unixSeconds).DateTime;
+            }
         }
 
-        return property.ValueKind switch
-        {
-            JsonValueKind.String when DateTime.TryParse(property.GetString(), out var parsed) => parsed,
-            JsonValueKind.Number when property.TryGetInt64(out var unixSeconds) => DateTimeOffset.FromUnixTimeSeconds(unixSeconds).DateTime,
-            _ => DateTime.MinValue
-        };
+        return DateTime.MinValue;
     }
 
-    private static string ReadString(JsonElement item, string propertyName)
+    private static string ReadString(JsonElement item, params string[] propertyNames)
     {
-        return item.TryGetProperty(propertyName, out var property)
-            ? property.GetString() ?? string.Empty
-            : string.Empty;
-    }
-
-    private static long ReadLong(JsonElement item, string propertyName)
-    {
-        if (!item.TryGetProperty(propertyName, out var property))
+        foreach (var propertyName in propertyNames)
         {
-            return 0;
+            if (item.TryGetProperty(propertyName, out var property))
+            {
+                return property.GetString() ?? string.Empty;
+            }
         }
 
-        return property.ValueKind switch
+        return string.Empty;
+    }
+
+    private static long ReadLong(JsonElement item, params string[] propertyNames)
+    {
+        foreach (var propertyName in propertyNames)
         {
-            JsonValueKind.Number when property.TryGetInt64(out var value) => value,
-            JsonValueKind.String when long.TryParse(property.GetString(), out var parsed) => parsed,
-            _ => 0
-        };
+            if (!item.TryGetProperty(propertyName, out var property))
+            {
+                continue;
+            }
+
+            if (property.ValueKind == JsonValueKind.Number && property.TryGetInt64(out var numberValue))
+            {
+                return numberValue;
+            }
+
+            if (property.ValueKind == JsonValueKind.String && long.TryParse(property.GetString(), out var parsedString))
+            {
+                return parsedString;
+            }
+        }
+
+        return 0;
     }
 }
