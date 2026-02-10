@@ -94,7 +94,7 @@ public sealed class KerioJsonRpcClient
     {
         var methods = discoveredMethods.Count > 0
             ? discoveredMethods
-            : new[] { "Logs.get" };
+            : new[] { "Logs.get", "Logs.read", "Log.get" };
 
         var fromIso = from.ToUniversalTime().ToString("O");
         var toIso = to.ToUniversalTime().ToString("O");
@@ -102,126 +102,93 @@ public sealed class KerioJsonRpcClient
         var toUnix = new DateTimeOffset(to.ToUniversalTime()).ToUnixTimeSeconds();
 
         var fields = new[] { "timestamp", "user", "url", "category", "bytes" };
-        var sortBy = new[] { new { columnName = "timestamp", direction = "Desc" } };
-        var logNames = new[] { "http", "http_access", "web", "access" };
+        var logNames = new[] { "http", "http_access", "web", "access", "traffic" };
+        var selectorKeys = new[] { "logName", "name", "type", "log", "logType", "kind" };
+        var containers = new[] { "", "query", "filter", "criteria", "condition" };
 
-        var queryFromTo = new { from = fromIso, to = toIso };
-        var queryKerio = BuildKerioQuery(fromUnix, toUnix);
+        var rangeVariants = new (string FromKey, object FromValue, string ToKey, object ToValue, string Label)[]
+        {
+            ("from", fromIso, "to", toIso, "iso from/to"),
+            ("from", fromUnix, "to", toUnix, "unix from/to"),
+            ("dateFrom", fromIso, "dateTo", toIso, "iso dateFrom/dateTo"),
+            ("begin", fromIso, "end", toIso, "iso begin/end"),
+            ("since", fromUnix, "till", toUnix, "unix since/till")
+        };
+
+        var pagingVariants = new (string K1, object V1, string K2, object V2, string Label)[]
+        {
+            ("start", 0, "limit", 5000, "start/limit"),
+            ("offset", 0, "count", 5000, "offset/count"),
+            ("offset", 0, "limit", 5000, "offset/limit"),
+            ("page", 1, "pageSize", 5000, "page/pageSize")
+        };
+
         var attempts = new List<(string AttemptName, object Payload)>();
 
         foreach (var method in methods)
         {
             foreach (var logName in logNames)
             {
-                attempts.Add(($"{method}(logName={logName}, query+fields+sortBy+start+limit)", BuildPayload(method, new
+                foreach (var selectorKey in selectorKeys)
                 {
-                    logName,
-                    query = queryKerio,
-                    fields,
-                    sortBy,
-                    start = 0,
-                    limit = 5000
-                })));
+                    foreach (var range in rangeVariants)
+                    {
+                        foreach (var container in containers)
+                        {
+                            foreach (var paging in pagingVariants)
+                            {
+                                var map = NewMap();
+                                map[selectorKey] = logName;
+                                map["fields"] = fields;
+                                map[paging.K1] = paging.V1;
+                                map[paging.K2] = paging.V2;
 
-                attempts.Add(($"{method}(logName={logName}, query+sortBy+start+limit)", BuildPayload(method, new
+                                if (string.IsNullOrWhiteSpace(container))
+                                {
+                                    map[range.FromKey] = range.FromValue;
+                                    map[range.ToKey] = range.ToValue;
+                                }
+                                else
+                                {
+                                    map[container] = NewMap((range.FromKey, range.FromValue), (range.ToKey, range.ToValue));
+                                }
+
+                                attempts.Add(($"{method}({selectorKey}={logName}, {container}:{range.Label}, {paging.Label})", BuildPayload(method, map)));
+                            }
+                        }
+                    }
+                }
+
+                // Positional variants
+                attempts.Add(($"{method} positional({logName}, fromUnix, toUnix, start, limit)",
+                    BuildPayload(method, new object[] { logName, fromUnix, toUnix, 0, 5000 })));
+
+                attempts.Add(($"{method} positional({logName}, object)",
+                    BuildPayload(method, new object[]
+                    {
+                        logName,
+                        NewMap(("from", fromIso), ("to", toIso), ("start", 0), ("limit", 5000), ("fields", fields))
+                    })));
+
+                attempts.Add(($"{method}({logName} only)", BuildPayload(method, NewMap(("logName", logName)))));
+            }
+
+            // No-selector attempts
+            foreach (var range in rangeVariants)
+            {
+                foreach (var paging in pagingVariants)
                 {
-                    logName,
-                    query = queryKerio,
-                    sortBy,
-                    start = 0,
-                    limit = 5000
-                })));
-
-                attempts.Add(($"{method}(query+sortBy+start+limit,no logName)", BuildPayload(method, new
-                {
-                    query = queryKerio,
-                    sortBy,
-                    start = 0,
-                    limit = 5000
-                })));
-
-                attempts.Add(($"{method}(query.from/to,no logName)", BuildPayload(method, new
-                {
-                    query = queryFromTo,
-                    start = 0,
-                    limit = 5000
-                })));
-
-                attempts.Add(($"{method}(log={logName}, query+sortBy)", BuildPayload(method, new
-                {
-                    log = logName,
-                    query = queryKerio,
-                    sortBy,
-                    start = 0,
-                    limit = 5000
-                })));
-
-                attempts.Add(($"{method}(type={logName}, query+sortBy)", BuildPayload(method, new
-                {
-                    type = logName,
-                    query = queryKerio,
-                    sortBy,
-                    start = 0,
-                    limit = 5000
-                })));
-
-                attempts.Add(($"{method} positional(logName,query,sortBy,start,limit)", BuildPayload(method, new object[]
-                {
-                    logName,
-                    queryKerio,
-                    sortBy,
-                    0,
-                    5000
-                })));
-
-                attempts.Add(($"{method} positional(query,sortBy,start,limit)", BuildPayload(method, new object[]
-                {
-                    queryKerio,
-                    sortBy,
-                    0,
-                    5000
-                })));
-
-                attempts.Add(($"{method} positional(query,start,limit)", BuildPayload(method, new object[]
-                {
-                    queryKerio,
-                    0,
-                    5000
-                })));
-
-                attempts.Add(($"{method}(logName={logName}, from/to unix + offset/count)", BuildPayload(method, new
-                {
-                    logName,
-                    from = fromUnix,
-                    to = toUnix,
-                    offset = 0,
-                    count = 5000,
-                    sortBy
-                })));
-
-                attempts.Add(($"{method}(logName={logName})", BuildPayload(method, new { logName })));
+                    var q = NewMap((range.FromKey, range.FromValue), (range.ToKey, range.ToValue));
+                    var m1 = NewMap(("query", q), (paging.K1, paging.V1), (paging.K2, paging.V2), ("fields", fields));
+                    attempts.Add(($"{method}(query only, {range.Label}, {paging.Label})", BuildPayload(method, m1)));
+                }
             }
 
             attempts.Add(($"{method}(empty params)", BuildPayload(method, new { })));
+            attempts.Add(($"{method}(no params member)", BuildPayloadWithoutParams(method)));
         }
 
-        attempts.Add(("Logs.get(no params member)", BuildPayloadWithoutParams("Logs.get")));
-        attempts.Add(("Logs.query(no params member)", BuildPayloadWithoutParams("Logs.query")));
-
         return attempts;
-    }
-
-    private static object BuildKerioQuery(long fromUnix, long toUnix)
-    {
-        return new
-        {
-            conditions = new object[]
-            {
-                new { fieldName = "timestamp", comparator = "GreaterOrEqual", value = fromUnix },
-                new { fieldName = "timestamp", comparator = "LessOrEqual", value = toUnix }
-            },
-            combination = "And"
-        };
     }
 
     private async Task<IReadOnlyList<string>> DiscoverLogMethodsAsync(string url, string token, CancellationToken cancellationToken)
@@ -269,27 +236,29 @@ public sealed class KerioJsonRpcClient
     {
         var list = new List<string>();
 
-        static void Collect(JsonElement e, List<string> listTarget)
+        static void Collect(JsonElement e, List<string> target)
         {
-            if (e.ValueKind == JsonValueKind.Array)
+            if (e.ValueKind != JsonValueKind.Array)
             {
-                foreach (var item in e.EnumerateArray())
+                return;
+            }
+
+            foreach (var item in e.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.String)
                 {
-                    if (item.ValueKind == JsonValueKind.String)
+                    var s = item.GetString();
+                    if (!string.IsNullOrWhiteSpace(s))
                     {
-                        var s = item.GetString();
-                        if (!string.IsNullOrWhiteSpace(s))
-                        {
-                            listTarget.Add(s);
-                        }
+                        target.Add(s);
                     }
-                    else if (item.ValueKind == JsonValueKind.Object && item.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String)
+                }
+                else if (item.ValueKind == JsonValueKind.Object && item.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String)
+                {
+                    var s = n.GetString();
+                    if (!string.IsNullOrWhiteSpace(s))
                     {
-                        var s = n.GetString();
-                        if (!string.IsNullOrWhiteSpace(s))
-                        {
-                            listTarget.Add(s);
-                        }
+                        target.Add(s);
                     }
                 }
             }
@@ -309,6 +278,17 @@ public sealed class KerioJsonRpcClient
 
         methods = list.Distinct(StringComparer.Ordinal).ToArray();
         return methods.Count > 0;
+    }
+
+    private static Dictionary<string, object?> NewMap(params (string Key, object? Value)[] entries)
+    {
+        var map = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var (key, value) in entries)
+        {
+            map[key] = value;
+        }
+
+        return map;
     }
 
     private static object BuildPayload(string method, object parameters) => new
