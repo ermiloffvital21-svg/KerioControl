@@ -108,7 +108,14 @@ public sealed class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Ошибка: {ex.Message}";
+            if (ex.Message.Contains("Invalid params", StringComparison.OrdinalIgnoreCase))
+            {
+                StatusMessage = "Ошибка параметров API Kerio. Укажите корректные Log method и Log names (CSV) по вашей документации/версии Kerio.";
+            }
+            else
+            {
+                StatusMessage = $"Ошибка: {ex.Message}";
+            }
         }
         finally
         {

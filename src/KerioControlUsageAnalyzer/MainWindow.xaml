@@ -35,6 +35,8 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
                 <TextBlock Grid.Column="0" Grid.Row="0" Text="KerioControl URL" />
@@ -61,8 +63,15 @@
                         Command="{Binding LoadLogsCommand}"
                         Content="Загрузить и анализировать" />
 
+
+                <TextBlock Grid.Column="0" Grid.Row="2" Text="Log method" />
+                <TextBox Grid.Column="0" Grid.Row="3" Margin="0,4,8,0" Text="{Binding Config.PreferredLogMethod, UpdateSourceTrigger=PropertyChanged}" />
+
+                <TextBlock Grid.Column="1" Grid.Row="2" Grid.ColumnSpan="4" Text="Log names (CSV)" />
+                <TextBox Grid.Column="1" Grid.Row="3" Grid.ColumnSpan="4" Margin="0,4,8,0" Text="{Binding Config.LogNamesCsv, UpdateSourceTrigger=PropertyChanged}" />
+
                 <CheckBox Grid.Column="0"
-                          Grid.Row="2"
+                          Grid.Row="4"
                           Grid.ColumnSpan="4"
                           Margin="0,10,8,0"
                           Content="Игнорировать ошибки TLS сертификата (для self-signed KerioControl)"

@@ -9,4 +9,10 @@ public sealed class KerioConfig
     public string Password { get; set; } = string.Empty;
 
     public bool IgnoreTlsCertificateErrors { get; set; } = true;
+
+    // Примеры: Logs.get, Logs.read
+    public string PreferredLogMethod { get; set; } = "Logs.get";
+
+    // Примеры: http,http_access,web,access,traffic
+    public string LogNamesCsv { get; set; } = "http,http_access,web,access,traffic";
 }

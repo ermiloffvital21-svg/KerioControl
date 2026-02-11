@@ -54,7 +54,7 @@ public sealed class KerioJsonRpcClient
     {
         var url = BuildApiUrl(config.BaseUrl);
         var discoveredMethods = await DiscoverLogMethodsAsync(url, token, cancellationToken);
-        var attempts = BuildLogRequestPayloads(from, to, discoveredMethods).Take(MaxAttempts).ToList();
+        var attempts = BuildLogRequestPayloads(config, from, to, discoveredMethods).Take(MaxAttempts).ToList();
         var attemptErrors = new List<string>();
 
         foreach (var attempt in attempts)
@@ -85,18 +85,21 @@ public sealed class KerioJsonRpcClient
     }
 
     private static IReadOnlyList<(string AttemptName, object Payload)> BuildLogRequestPayloads(
+        KerioConfig config,
         DateTime from,
         DateTime to,
         IReadOnlyList<string> discoveredMethods)
     {
-        var methods = discoveredMethods.Count > 0 ? discoveredMethods : new[] { "Logs.get", "Logs.read", "Log.get" };
+        var methods = discoveredMethods.Count > 0
+            ? discoveredMethods
+            : BuildMethodCandidates(config.PreferredLogMethod);
         var fromIso = from.ToUniversalTime().ToString("O");
         var toIso = to.ToUniversalTime().ToString("O");
         var fromUnix = new DateTimeOffset(from.ToUniversalTime()).ToUnixTimeSeconds();
         var toUnix = new DateTimeOffset(to.ToUniversalTime()).ToUnixTimeSeconds();
 
         var fields = new[] { "timestamp", "user", "url", "category", "bytes" };
-        var logNames = new[] { "http", "http_access", "web", "access" };
+        var logNames = BuildLogNameCandidates(config.LogNamesCsv);
         var attempts = new List<(string AttemptName, object Payload)>();
 
         foreach (var method in methods)
@@ -164,6 +167,35 @@ public sealed class KerioJsonRpcClient
         }
 
         return attempts;
+    }
+
+    
+    private static string[] BuildMethodCandidates(string preferredMethod)
+    {
+        var methods = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(preferredMethod))
+        {
+            methods.Add(preferredMethod.Trim());
+        }
+
+        methods.AddRange(new[] { "Logs.get", "Logs.read", "Log.get" });
+        return methods.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static string[] BuildLogNameCandidates(string logNamesCsv)
+    {
+        var parsed = (logNamesCsv ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .ToList();
+
+        if (parsed.Count == 0)
+        {
+            parsed.AddRange(new[] { "http", "http_access", "web", "access" });
+        }
+
+        return parsed.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     private async Task<IReadOnlyList<string>> DiscoverLogMethodsAsync(string url, string token, CancellationToken cancellationToken)
