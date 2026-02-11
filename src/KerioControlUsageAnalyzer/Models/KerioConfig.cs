@@ -15,4 +15,7 @@ public sealed class KerioConfig
 
     // Примеры: http,http_access,web,access,traffic
     public string LogNamesCsv { get; set; } = "http,http_access,web,access,traffic";
+
+    // Необязательно: JSON для @params (берется как есть и отправляется первым).
+    public string CustomParamsJson { get; set; } = string.Empty;
 }

@@ -102,6 +102,14 @@ public sealed class KerioJsonRpcClient
         var logNames = BuildLogNameCandidates(config.LogNamesCsv);
         var attempts = new List<(string AttemptName, object Payload)>();
 
+        if (TryParseCustomParams(config.CustomParamsJson, out var customParams))
+        {
+            foreach (var method in methods)
+            {
+                attempts.Add(($"{method}(custom @params JSON)", BuildPayload(method, customParams)));
+            }
+        }
+
         foreach (var method in methods)
         {
             foreach (var logName in logNames)
@@ -196,6 +204,27 @@ public sealed class KerioJsonRpcClient
         }
 
         return parsed.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static bool TryParseCustomParams(string customParamsJson, out JsonElement parsed)
+    {
+        parsed = default;
+
+        if (string.IsNullOrWhiteSpace(customParamsJson))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(customParamsJson);
+            parsed = doc.RootElement.Clone();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private async Task<IReadOnlyList<string>> DiscoverLogMethodsAsync(string url, string token, CancellationToken cancellationToken)

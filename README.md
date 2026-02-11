@@ -5,6 +5,7 @@
 ## Что реализовано
 
 - В UI добавлены поля `Log method` и `Log names (CSV)`: можно явно указать метод и имена логов из вашей версии Kerio без изменения кода.
+- Добавлено поле `Custom @params JSON` — можно вставить точный объект `@params` из документации/примера вашей версии Kerio.
 - Подключение к KerioControl (`Session.login`).
 - Загрузка логов (`Logs.get`, лог `http`) за выбранный период.
 - Отображение сырых записей в `DataGrid`.
@@ -29,6 +30,7 @@
 
 ## Важные замечания по KerioControl 9.5
 
+- Если API вашей сборки Kerio отличается по сигнатуре, заполните `Custom @params JSON`: он отправляется первым и без изменений.
 - Для предотвращения `A task was canceled` клиент ограничивает количество fallback-попыток и использует увеличенный таймаут запроса; при таймауте UI показывает отдельное понятное сообщение.
 - В разных сборках KerioControl могут отличаться названия методов и схема ответа API. Клиент теперь динамически пытается определить доступные log-методы через discovery (`system.listMethods`/`system.describe`/`Api.getMethods`) и затем подбирает несколько форм вызова (`query`, `from/to`, `filter/page`, `start/count`, named/positional, payload без `params`) для `http`/`http_access`/`web`, включая расширенный перебор ключей (`logName/name/type/log/logType`), контейнеров (`query/filter/criteria`) и диапазонов времени (`from/to`, `dateFrom/dateTo`, `begin/end`).
 - Если ваш сервер использует cookie-сессию вместо Bearer token, скорректируйте авторизацию в `KerioJsonRpcClient`.
