@@ -18,4 +18,7 @@ public sealed class KerioConfig
 
     // Необязательно: JSON для @params (берется как есть и отправляется первым).
     public string CustomParamsJson { get; set; } = string.Empty;
+
+    // Необязательно: полный JSON-RPC request (method + params), отправляется как есть и имеет наивысший приоритет.
+    public string CustomRequestJson { get; set; } = string.Empty;
 }

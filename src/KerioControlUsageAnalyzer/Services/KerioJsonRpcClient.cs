@@ -53,6 +53,20 @@ public sealed class KerioJsonRpcClient
         CancellationToken cancellationToken)
     {
         var url = BuildApiUrl(config.BaseUrl);
+
+        if (TryParseCustomRequest(config.CustomRequestJson, out var customRequestPayload))
+        {
+            using var doc = await SendAuthorizedJsonRpcAsync(url, token, customRequestPayload!, cancellationToken);
+            EnsureNoJsonRpcError(doc.RootElement, "custom full JSON-RPC request");
+
+            if (TryExtractLogItems(doc.RootElement, out var customItems))
+            {
+                return ParseLogs(customItems);
+            }
+
+            throw new InvalidOperationException("Custom full JSON-RPC request выполнен, но массив логов не найден в ответе.");
+        }
+
         var discoveredMethods = await DiscoverLogMethodsAsync(url, token, cancellationToken);
         var attempts = BuildLogRequestPayloads(config, from, to, discoveredMethods).Take(MaxAttempts).ToList();
         var attemptErrors = new List<string>();
@@ -204,6 +218,49 @@ public sealed class KerioJsonRpcClient
         }
 
         return parsed.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static bool TryParseCustomRequest(string customRequestJson, out object? payload)
+    {
+        payload = null;
+
+        if (string.IsNullOrWhiteSpace(customRequestJson))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(customRequestJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            if (!doc.RootElement.TryGetProperty("method", out var methodElement) || methodElement.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            var method = methodElement.GetString()!;
+            object? paramsObj = new { };
+
+            if (doc.RootElement.TryGetProperty("params", out var paramsElement))
+            {
+                paramsObj = paramsElement.Clone();
+            }
+            else if (doc.RootElement.TryGetProperty("@params", out var atParamsElement))
+            {
+                paramsObj = atParamsElement.Clone();
+            }
+
+            payload = BuildPayload(method, paramsObj!);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool TryParseCustomParams(string customParamsJson, out JsonElement parsed)
